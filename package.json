@@ -1,0 +1,19 @@
+{
+  "name": "tp3-monorepo",
+  "version": "1.0.0",
+  "description": "Monorepo fullstack avec Next.js, Django, Socket.io",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^1.10.16"
+  }
+}
