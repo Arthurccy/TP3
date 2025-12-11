@@ -1,9 +1,50 @@
 import apiClient from '@/lib/api'
 
+// On définit l'interface ici ou dans @/types
+interface QuizSession {
+  id: number
+  access_code: string
+  status: 'WAITING' | 'IN_PROGRESS' | 'COMPLETED'
+  quiz_title: string
+  current_question_index: number
+}
+
 export const sessionService = {
+  // L'étudiant rejoint (déjà fait)
   async join(accessCode: string) {
-    // Cette route retourne { message, session_id, participant_id }
     const response = await apiClient.post('/api/sessions/join/', { access_code: accessCode })
+    return response.data
+  },
+
+  // --- NOUVELLES MÉTHODES ---
+
+  // L'enseignant crée une session
+  async create(quizId: number) {
+    const response = await apiClient.post('/api/sessions/', { quiz: quizId })
+    return response.data
+  },
+
+  // Récupérer les infos d'une session (pour le Host et le Joueur)
+  async getById(id: string | number) {
+    const response = await apiClient.get<QuizSession>(`/api/sessions/${id}/`)
+    return response.data
+  },
+
+  // Démarrer la session (WAITING -> IN_PROGRESS)
+  async start(id: string | number) {
+    const response = await apiClient.post(`/api/sessions/${id}/start/`)
+    return response.data
+  },
+
+  // Passer à la question suivante
+  async nextQuestion(id: string | number) {
+    const response = await apiClient.post(`/api/sessions/${id}/next-question/`)
+    return response.data
+  },
+
+  // Terminer la session
+  async end(id: string | number) {
+    const response = await apiClient.post(`/api/sessions/${id}/end/`)
     return response.data
   }
 }
