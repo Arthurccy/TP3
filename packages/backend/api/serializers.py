@@ -193,16 +193,30 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
         question_type = attrs.get('question_type')
         options = attrs.get('options', [])
 
-        if question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
-            if not options:
-                raise serializers.ValidationError({"options": f"Les options sont obligatoires pour les questions de type {question_type}."})
-            
-            correct_options = [opt for opt in options if opt.get('is_correct', False)]
-            if not correct_options:
-                raise serializers.ValidationError({"options": "Au moins une option doit être marquée comme correcte."})
+        # --- Validation QCM ---
+        if question_type == Question.QuestionType.MULTIPLE_CHOICE:
+            if len(options) < 2:
+                raise serializers.ValidationError({"options": "Un QCM doit avoir au moins 2 options."})
+            if not any(opt.get('is_correct') for opt in options):
+                raise serializers.ValidationError({"options": "Au moins une option doit être correcte."})
 
-            if question_type == Question.QuestionType.TRUE_FALSE and len(options) != 2:
-                raise serializers.ValidationError({"options": "Les questions Vrai/Faux doivent avoir exactement 2 options."})
+        # --- Validation Vrai/Faux ---
+        elif question_type == Question.QuestionType.TRUE_FALSE:
+            # On s'assure qu'il y a bien 2 options (Vrai et Faux)
+            # Note : Le frontend enverra 2 options, mais on vérifie quand même
+            if len(options) != 2:
+                raise serializers.ValidationError({"options": "Une question Vrai/Faux doit avoir exactement 2 options."})
+            if not any(opt.get('is_correct') for opt in options):
+                raise serializers.ValidationError({"options": "Il faut indiquer si c'est Vrai ou Faux."})
+
+        # --- Validation Réponse Courte ---
+        elif question_type == Question.QuestionType.SHORT_ANSWER:
+            # Pour une réponse courte, on utilise les options pour stocker la/les bonne(s) réponse(s) acceptée(s)
+            if not options:
+                raise serializers.ValidationError({"options": "Vous devez fournir la réponse attendue."})
+            # Toutes les options fournies sont considérées comme des réponses valides (synonymes)
+            for opt in options:
+                opt['is_correct'] = True 
 
         return attrs
 

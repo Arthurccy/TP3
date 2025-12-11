@@ -278,14 +278,30 @@ class Answer(models.Model):
 
     def save(self, *args, **kwargs):
         # Calculer automatiquement si la réponse est correcte
-        if self.selected_option:
-            self.is_correct = self.selected_option.is_correct
+        
+        # Cas 1 : QCM ou Vrai/Faux (Basé sur l'ID de l'option)
+        if self.question.question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
+            if self.selected_option:
+                self.is_correct = self.selected_option.is_correct
+        
+        # Cas 2 : Réponse courte (Comparaison de texte)
+        elif self.question.question_type == Question.QuestionType.SHORT_ANSWER:
+            if self.text_answer:
+                # On récupère les bonnes réponses possibles stockées dans les options
+                correct_answers = self.question.options.filter(is_correct=True).values_list('text', flat=True)
+                
+                # Normalisation : minuscule et sans espaces inutiles
+                user_text = self.text_answer.strip().lower()
+                
+                # On vérifie si la réponse de l'utilisateur correspond à l'une des réponses attendues
+                self.is_correct = any(user_text == correct.strip().lower() for correct in correct_answers)
+            else:
+                self.is_correct = False
 
         super().save(*args, **kwargs)
 
-        # Mettre à jour le score du participant
+        # Mettre à jour le score du participant (Code existant inchangé)
         if self.is_correct:
-            # Score basé sur la rapidité : plus c'est rapide, plus le score est élevé
             time_bonus = max(0, self.question.time_limit * 1000 - self.response_time) // 100
             points = 100 + time_bonus
             self.participant.score += points
