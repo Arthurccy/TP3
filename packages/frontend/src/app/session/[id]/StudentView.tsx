@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { sessionService } from '@/services/session.service'
 import { Button } from '@/components/ui/Button'
-// Import du Hook Socket qu'on vient de créer
+import { TimerBar } from '@/components/session/TimerBar'
+
+
 import { useSocket } from '@/hooks/useSocket'
 
 // Couleurs fixes pour les options (style Kahoot)
@@ -126,6 +128,16 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
       <div className="min-h-screen bg-gray-100 flex flex-col p-4">
         <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow-sm">
             <span className="font-bold text-gray-700">Question en cours</span>
+            <span className="text-sm font-mono bg-gray-100 px-2 rounded">
+                {session.current_question.time_limit}s
+            </span>
+        </div>
+
+        <div className="mb-6 px-1">
+            <TimerBar 
+                key={session.current_question.id} // <--- TRÈS IMPORTANT pour le reset
+                duration={session.current_question.time_limit} 
+            />
         </div>
 
         <div className="mb-8 text-center">

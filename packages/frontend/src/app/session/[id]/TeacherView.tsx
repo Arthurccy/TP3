@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { sessionService } from '@/services/session.service'
 import { Button } from '@/components/ui/Button'
+import { TimerBar } from '@/components/session/TimerBar'
 // Import du Hook Socket
 import { useSocket } from '@/hooks/useSocket'
 
@@ -161,6 +162,16 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
               <h1 className="text-3xl font-bold text-gray-900">
                 Question affichée aux élèves
               </h1>
+
+              <div className="max-w-md mx-auto mb-8">
+                <TimerBar 
+                    key={session.current_question_index} // Reset à chaque question
+                    // On suppose 30s par défaut si l'info n'est pas dans le résumé session
+                    // Idéalement, ajoute time_limit dans le serializer session.current_question
+                    duration={30} 
+                />
+                <p className="text-xs text-gray-400 mt-1 text-right">Temps restant estimé</p>
+              </div>
               
               <div className="mt-8 max-w-md mx-auto">
                 <div className="flex justify-between text-sm text-gray-600 mb-1">
