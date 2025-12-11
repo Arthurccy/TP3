@@ -1,56 +1,87 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation' // <--- Import nécessaire
+import { useRouter } from 'next/navigation'
 import { sessionService } from '@/services/session.service'
 import { Button } from '@/components/ui/Button'
+// Import du Hook Socket qu'on vient de créer
+import { useSocket } from '@/hooks/useSocket'
 
 // Couleurs fixes pour les options (style Kahoot)
 const OPTION_COLORS = [
-  "bg-red-500 hover:bg-red-600",    // Option 1
-  "bg-blue-500 hover:bg-blue-600",   // Option 2
-  "bg-yellow-500 hover:bg-yellow-600", // Option 3
-  "bg-green-500 hover:bg-green-600"  // Option 4
+  "bg-red-500 hover:bg-red-600",     // Option 1
+  "bg-blue-500 hover:bg-blue-600",    // Option 2
+  "bg-yellow-500 hover:bg-yellow-600",// Option 3
+  "bg-green-500 hover:bg-green-600"   // Option 4
 ]
 
 export default function StudentSessionView({ sessionId }: { sessionId: string }) {
-  const router = useRouter() // <--- Hook pour la navigation
+  const router = useRouter()
+  
+  // 1. Connexion WebSocket via notre Hook personnalisé
+  const socket = useSocket(sessionId)
+
   const [session, setSession] = useState<any>(null)
   const [hasAnswered, setHasAnswered] = useState(false)
   const [lastQuestionId, setLastQuestionId] = useState<number | null>(null)
 
-  useEffect(() => {
-    const fetchSession = async () => {
-      try {
-        const data = await sessionService.getById(sessionId)
-        setSession(data)
+  // Fonction de récupération des données (appelée sur signal du socket)
+  const fetchSession = async () => {
+    try {
+      const data = await sessionService.getById(sessionId)
+      setSession(data)
 
-        // Reset de l'état "a répondu" si la question change
-        const currentId = data.current_question?.id || null
-        
-        if (currentId !== lastQuestionId) {
-            setHasAnswered(false)
-            setLastQuestionId(currentId)
-        }
-      } catch (e) {
-        console.error(e)
+      // Détection de changement de question pour réactiver les boutons
+      const currentId = data.current_question?.id || null
+      
+      if (currentId !== lastQuestionId) {
+          setHasAnswered(false)
+          setLastQuestionId(currentId)
       }
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  // 2. Gestion des Événements WebSocket
+  useEffect(() => {
+    // Chargement initial
+    fetchSession()
+
+    if (socket) {
+        // Écoute du signal "Mise à jour" venant du serveur
+        socket.on('session_updated', () => {
+            console.log("⚡ Socket: Mise à jour reçue !")
+            fetchSession()
+        })
     }
     
-    fetchSession()
-    const interval = setInterval(fetchSession, 1000)
-    return () => clearInterval(interval)
-  }, [sessionId, lastQuestionId])
+    // Fallback : On garde un polling très lent (10s) au cas où le socket coupe
+    const interval = setInterval(fetchSession, 10000)
+    
+    return () => {
+        clearInterval(interval)
+        if (socket) socket.off('session_updated')
+    }
+  }, [sessionId, lastQuestionId, socket])
 
   const handleAnswer = async (optionId: number) => {
     if (hasAnswered) return
     setHasAnswered(true)
 
     try {
+        // Envoi de la réponse à l'API Django
         await sessionService.submitAnswer(sessionId, {
             selected_option: optionId,
             response_time: 1500 
         })
+
+        // 3. Signalement immédiat via Socket
+        // On dit au serveur : "J'ai changé l'état du jeu, préviens tout le monde"
+        if (socket) {
+            socket.emit('trigger_update', sessionId)
+        }
+
     } catch (error) {
         console.error("Erreur réponse", error)
         setHasAnswered(false)
@@ -60,7 +91,7 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
 
   if (!session) return <div className="p-8 text-center">Connexion à la session...</div>
 
-  // --- ÉTAT 1 : LOBBY ---
+  // --- ÉTAT 1 : LOBBY (EN ATTENTE) ---
   if (session.status === 'WAITING') {
     return (
       <div className="min-h-screen bg-blue-50 flex flex-col items-center justify-center p-4">
@@ -73,10 +104,11 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
     )
   }
 
-  // --- ÉTAT 2 : JEU ---
+  // --- ÉTAT 2 : JEU (EN COURS) ---
   if (session.status === 'IN_PROGRESS' && session.current_question) {
     const options = session.current_question.options || []
 
+    // Écran d'attente après réponse
     if (hasAnswered) {
         return (
             <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4 text-center">
@@ -89,6 +121,7 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
         )
     }
 
+    // Écran de jeu (Questions)
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col p-4">
         <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow-sm">
@@ -114,7 +147,7 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
     )
   }
 
-  // --- ÉTAT 3 : FIN (Modifié avec le bouton) ---
+  // --- ÉTAT 3 : FIN ---
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
         <div className="bg-white p-8 rounded-xl shadow-lg text-center max-w-md w-full">

@@ -4,6 +4,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Quiz, Question, QuestionOption, QuizSession, Participant, Answer
 from django.utils import timezone
+from django.db.models import Max
 
 User = get_user_model()
 
@@ -168,7 +169,7 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = ['id', 'quiz', 'text', 'question_type', 'order', 'time_limit', 'options']
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'order']
 
     def validate_quiz(self, value):
         user = self.context['request'].user
@@ -207,6 +208,12 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         options_data = validated_data.pop('options', [])
+
+        quiz = validated_data['quiz']
+        current_max_order = Question.objects.filter(quiz=quiz).aggregate(Max('order'))['order__max'] or 0
+        validated_data['order'] = (current_max_order or 0) + 1
+
+
         question = Question.objects.create(**validated_data)
         for option_data in options_data:
             QuestionOption.objects.create(question=question, **option_data)
