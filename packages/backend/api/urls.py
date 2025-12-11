@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
+from .views import submit_answer
 
 app_name = 'api'
 
@@ -29,4 +30,5 @@ urlpatterns = [
     # - DELETE /api/quizzes/{id}/         -> destroy
     # - GET    /api/quizzes/{id}/questions/ -> action personnalisée
     path('', include(router.urls)),
+    path('sessions/<uuid:session_id>/answer/', submit_answer, name='submit_answer'),
 ]

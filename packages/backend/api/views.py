@@ -5,6 +5,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.contrib.auth import get_user_model
 
+from django.db import transaction
+
 from .serializers import (
     UserSerializer,
     RegisterSerializer,
@@ -13,8 +15,17 @@ from .serializers import (
     QuizDetailSerializer,
     QuizCreateUpdateSerializer,
     QuestionSerializer,
+    AnswerCreateSerializer,
+    AnswerSerializer,
 )
-from .models import Quiz, Question
+from .models import (
+    Quiz,
+    Question,
+    QuizSession,
+    Participant,
+    QuestionOption,
+    Answer,
+)
 
 User = get_user_model()
 
@@ -219,3 +230,80 @@ class QuizViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+
+# ==================== Réponses ====================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_answer(request, session_id):
+    """Soumettre une réponse pour la question courante d'une session."""
+
+    serializer = AnswerCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+
+    # Récupérer la session et la question courante
+    try:
+        session = QuizSession.objects.select_related('quiz').get(pk=session_id)
+    except QuizSession.DoesNotExist:
+        return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if session.status != QuizSession.Status.IN_PROGRESS:
+        return Response({'detail': "La session n'est pas en cours."}, status=status.HTTP_400_BAD_REQUEST)
+
+    current_question = session.get_current_question()
+    if not current_question:
+        return Response({'detail': 'Aucune question courante pour cette session.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if data['questionId'] != current_question.id:
+        return Response({'detail': 'Cette question ne correspond pas à la question courante.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Vérifier que l'utilisateur est participant à la session
+    try:
+        participant = Participant.objects.get(session=session, user=request.user)
+    except Participant.DoesNotExist:
+        return Response({'detail': 'Vous ne participez pas à cette session.'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Empêcher les réponses multiples à la même question
+    if Answer.objects.filter(participant=participant, question=current_question).exists():
+        return Response({'detail': 'Vous avez déjà répondu à cette question.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    selected_option = None
+    if data.get('selectedOptionId') is not None:
+        try:
+            selected_option = QuestionOption.objects.get(
+                pk=data['selectedOptionId'],
+                question=current_question
+            )
+        except QuestionOption.DoesNotExist:
+            return Response({'detail': "L'option sélectionnée n'appartient pas à cette question."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Règles de validation selon le type de question
+    if current_question.question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
+        if not selected_option:
+            return Response({'detail': 'selectedOptionId est requis pour cette question.'}, status=status.HTTP_400_BAD_REQUEST)
+    elif current_question.question_type == Question.QuestionType.SHORT_ANSWER:
+        if not data.get('textAnswer'):
+            return Response({'detail': 'textAnswer est requis pour cette question.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Déterminer la correction (utile pour les réponses texte)
+    is_correct = False
+    if selected_option:
+        is_correct = selected_option.is_correct
+    elif current_question.question_type == Question.QuestionType.SHORT_ANSWER:
+        user_answer = (data.get('textAnswer') or '').strip().lower()
+        correct_options = current_question.options.filter(is_correct=True)
+        is_correct = any(opt.text.strip().lower() == user_answer for opt in correct_options)
+
+    with transaction.atomic():
+        answer = Answer.objects.create(
+            participant=participant,
+            question=current_question,
+            selected_option=selected_option,
+            text_answer=data.get('textAnswer') or '',
+            response_time=data['responseTime'],
+            is_correct=is_correct,
+        )
+
+    return Response(AnswerSerializer(answer).data, status=status.HTTP_201_CREATED)

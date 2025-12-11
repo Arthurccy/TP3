@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import Quiz, Question, QuestionOption
+from .models import Quiz, Question, QuestionOption, Answer
 
 User = get_user_model()
 
@@ -211,3 +211,36 @@ class QuizCreateUpdateSerializer(serializers.ModelSerializer):
         """
         # Le created_by est automatiquement assigné dans la vue
         return super().create(validated_data)
+
+
+# ==================== Sérialiseurs Réponses ====================
+
+class AnswerCreateSerializer(serializers.Serializer):
+    """Payload attendu pour la soumission d'une réponse."""
+
+    questionId = serializers.IntegerField()
+    selectedOptionId = serializers.IntegerField(required=False, allow_null=True)
+    textAnswer = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    responseTime = serializers.IntegerField(min_value=0)
+
+
+class AnswerSerializer(serializers.ModelSerializer):
+    """Sérialiseur de réponse créé, retourné au client."""
+
+    question_id = serializers.IntegerField(source='question.id', read_only=True)
+    selected_option_id = serializers.IntegerField(source='selected_option.id', read_only=True)
+    participant_id = serializers.IntegerField(source='participant.id', read_only=True)
+
+    class Meta:
+        model = Answer
+        fields = [
+            'id',
+            'participant_id',
+            'question_id',
+            'selected_option_id',
+            'text_answer',
+            'is_correct',
+            'response_time',
+            'answered_at',
+        ]
+        read_only_fields = fields
