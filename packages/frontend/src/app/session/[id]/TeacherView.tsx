@@ -111,7 +111,7 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
     // Astuce : on compare le nb total de réponses de l'élève avec l'index de la question
     // (C'est une approximation pour le polling, ce sera plus précis avec WebSocket)
     const currentQIndex = session.current_question_index + 1
-    const answersCount = session.participants.filter((p: any) => p.answer_count >= currentQIndex).length
+    const answersCount = session.participants.filter((p: any) => p.has_answered).length
     const totalPlayers = session.participants.length
 
     return (
@@ -178,8 +178,12 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-gray-900 truncate">{p.username}</p>
-                  <p className="text-xs text-gray-500">{p.answer_count} réponses</p>
+                    <p className="font-medium text-gray-900 truncate">
+                        {p.username} 
+                        {/* Petit point vert si a répondu */}
+                        {p.has_answered && <span className="ml-2 text-green-500 text-xs">✓ Répondu</span>}
+                    </p>
+                    <p className="text-xs text-gray-500">{p.answer_count} réponses</p>
                 </div>
                 <div className="font-bold text-blue-600">
                   {p.score} pts

@@ -290,8 +290,26 @@ class QuizSessionDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'access_code', 'host', 'created_at', 'started_at', 'ended_at']
 
     def get_participants(self, obj):
+        # 1. On récupère les participants de base
         participants = obj.participants.all().order_by('-score', 'user__username')
-        return ParticipantSerializer(participants, many=True).data
+        data = ParticipantSerializer(participants, many=True).data
+        
+        # 2. On identifie la question en cours
+        current_question = obj.get_current_question()
+        
+        # 3. On récupère la liste des IDs des participants qui ont répondu à CETTE question
+        answered_ids = set()
+        if current_question:
+            answered_ids = set(Answer.objects.filter(
+                question=current_question,
+                participant__session=obj
+            ).values_list('participant_id', flat=True))
+            
+        # 4. On ajoute un champ booléen "has_answered" à chaque participant
+        for p in data:
+            p['has_answered'] = p['id'] in answered_ids
+            
+        return data
 
     def get_current_question(self, obj):
         # On ne renvoie la question que si la session est EN COURS
