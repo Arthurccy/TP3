@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation' // <--- Import nécessaire
 import { sessionService } from '@/services/session.service'
 import { Button } from '@/components/ui/Button'
 
@@ -13,8 +14,9 @@ const OPTION_COLORS = [
 ]
 
 export default function StudentSessionView({ sessionId }: { sessionId: string }) {
+  const router = useRouter() // <--- Hook pour la navigation
   const [session, setSession] = useState<any>(null)
-  const [hasAnswered, setHasAnswered] = useState(false) // Pour bloquer après réponse
+  const [hasAnswered, setHasAnswered] = useState(false)
   const [lastQuestionId, setLastQuestionId] = useState<number | null>(null)
 
   useEffect(() => {
@@ -24,7 +26,6 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
         setSession(data)
 
         // Reset de l'état "a répondu" si la question change
-        // CORRECTION ICI : on ajoute "|| null" pour gérer le cas undefined
         const currentId = data.current_question?.id || null
         
         if (currentId !== lastQuestionId) {
@@ -43,16 +44,16 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
 
   const handleAnswer = async (optionId: number) => {
     if (hasAnswered) return
-    setHasAnswered(true) // On bloque immédiatement le bouton
+    setHasAnswered(true)
 
     try {
         await sessionService.submitAnswer(sessionId, {
             selected_option: optionId,
-            response_time: 1500 // On simule un temps pour l'instant
+            response_time: 1500 
         })
     } catch (error) {
         console.error("Erreur réponse", error)
-        setHasAnswered(false) // On débloque si erreur
+        setHasAnswered(false)
         alert("Erreur lors de l'envoi de la réponse")
     }
   }
@@ -76,11 +77,10 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
   if (session.status === 'IN_PROGRESS' && session.current_question) {
     const options = session.current_question.options || []
 
-    // Si l'étudiant a déjà répondu à CETTE question
     if (hasAnswered) {
         return (
             <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4 text-center">
-                <div className="bg-white p-8 rounded-xl shadow-lg">
+                <div className="bg-white p-8 rounded-xl shadow-lg max-w-sm w-full">
                     <div className="text-5xl mb-4">👍</div>
                     <h2 className="text-2xl font-bold text-gray-800">Réponse envoyée !</h2>
                     <p className="text-gray-500 mt-2">On attend les autres...</p>
@@ -91,18 +91,14 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
 
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col p-4">
-        {/* En-tête avec info question */}
         <div className="flex justify-between items-center mb-6 bg-white p-4 rounded-lg shadow-sm">
             <span className="font-bold text-gray-700">Question en cours</span>
-            {/* On affichera le timer ici plus tard */}
         </div>
 
-        {/* Texte de la question pour aider l'élève */}
         <div className="mb-8 text-center">
             <h2 className="text-xl font-medium text-gray-800">{session.current_question.text}</h2>
         </div>
         
-        {/* Grille des boutons */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
            {options.map((option: any, index: number) => (
                <button
@@ -118,12 +114,19 @@ export default function StudentSessionView({ sessionId }: { sessionId: string })
     )
   }
 
-  // --- ÉTAT 3 : FIN ---
+  // --- ÉTAT 3 : FIN (Modifié avec le bouton) ---
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="bg-white p-8 rounded-xl shadow-lg text-center max-w-md w-full">
+            <div className="text-6xl mb-6">🏁</div>
             <h1 className="text-3xl font-bold text-gray-900 mb-4">Quiz terminé !</h1>
-            <p className="text-gray-600">Merci d'avoir participé.</p>
+            <p className="text-gray-600 mb-8">
+                Merci d'avoir participé à cette session.
+            </p>
+            
+            <Button onClick={() => router.push('/dashboard')}>
+                Retour au tableau de bord
+            </Button>
         </div>
     </div>
   )
