@@ -1,22 +1,30 @@
 import apiClient from '@/lib/api'
 
-// On définit l'interface ici ou dans @/types
+// On définit l'interface ici pour la clarté
 interface QuizSession {
   id: number
   access_code: string
   status: 'WAITING' | 'IN_PROGRESS' | 'COMPLETED'
   quiz_title: string
   current_question_index: number
+  current_question?: {
+    id: number
+    text: string
+    time_limit: number
+    options: Array<{
+        id: number
+        text: string
+        order: number
+    }>
+  }
 }
 
 export const sessionService = {
-  // L'étudiant rejoint (déjà fait)
+  // L'étudiant rejoint
   async join(accessCode: string) {
     const response = await apiClient.post('/api/sessions/join/', { access_code: accessCode })
     return response.data
   },
-
-  // --- NOUVELLES MÉTHODES ---
 
   // L'enseignant crée une session
   async create(quizId: number) {
@@ -45,6 +53,12 @@ export const sessionService = {
   // Terminer la session
   async end(id: string | number) {
     const response = await apiClient.post(`/api/sessions/${id}/end/`)
+    return response.data
+  },
+
+  // Envoyer une réponse
+  async submitAnswer(sessionId: string | number, data: { selected_option: number; response_time: number }) {
+    const response = await apiClient.post(`/api/sessions/${sessionId}/answer/`, data)
     return response.data
   }
 }
