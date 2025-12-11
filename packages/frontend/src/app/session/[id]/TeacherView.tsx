@@ -4,13 +4,19 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { sessionService } from '@/services/session.service'
 import { Button } from '@/components/ui/Button'
+// Import du Hook Socket
+import { useSocket } from '@/hooks/useSocket'
 
 export default function TeacherSessionView({ sessionId }: { sessionId: string }) {
   const router = useRouter()
+  
+  // 1. Connexion au serveur WebSocket
+  const socket = useSocket(sessionId)
+
   const [session, setSession] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
-  // Polling pour rafraîchir les données
+  // Fonction de récupération des données
   const fetchSession = async () => {
     try {
       const data = await sessionService.getById(sessionId)
@@ -23,16 +29,36 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
     }
   }
 
+  // 2. Gestion des événements WebSocket
   useEffect(() => {
     fetchSession()
-    // On poll toutes les 2 secondes pour voir les réponses arriver
-    const interval = setInterval(fetchSession, 2000)
-    return () => clearInterval(interval)
-  }, [sessionId, router])
+
+    if (socket) {
+        // Dès qu'un élève rejoint ou répond, le serveur envoie ce signal
+        socket.on('session_updated', () => {
+            console.log("⚡ Socket: Mise à jour reçue (Nouveau participant ou réponse)")
+            fetchSession()
+        })
+    }
+
+    // Fallback : Polling lent (5s) par sécurité
+    const interval = setInterval(fetchSession, 5000)
+    
+    return () => {
+        clearInterval(interval)
+        if (socket) socket.off('session_updated')
+    }
+  }, [sessionId, router, socket])
+
+  // --- ACTIONS DU PROF (Avec émission de signal) ---
 
   const handleStart = async () => {
     try {
       await sessionService.start(sessionId)
+      
+      // 3. On prévient les élèves que ça commence
+      if (socket) socket.emit('trigger_update', sessionId)
+      
       fetchSession()
     } catch (e) {
       alert("Erreur démarrage")
@@ -42,6 +68,10 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
   const handleNext = async () => {
     try {
       await sessionService.nextQuestion(sessionId)
+      
+      // 3. On prévient les élèves que la question a changé
+      if (socket) socket.emit('trigger_update', sessionId)
+      
       fetchSession()
     } catch (e) {
       alert("Impossible de passer à la suite")
@@ -52,6 +82,10 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
     if(!confirm("Terminer la session ?")) return
     try {
       await sessionService.end(sessionId)
+      
+      // 3. On prévient les élèves que c'est fini
+      if (socket) socket.emit('trigger_update', sessionId)
+      
       router.push('/dashboard')
     } catch (e) {
       alert("Erreur fin")
@@ -74,14 +108,13 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
             </div>
           </div>
 
-          {/* Liste des participants qui rejoignent */}
           <div className="bg-indigo-800/50 rounded-xl p-6 backdrop-blur-sm">
             <h3 className="text-xl font-semibold mb-4">
               Participants ({session.participants?.length || 0})
             </h3>
             <div className="flex flex-wrap gap-2 justify-center">
               {session.participants?.map((p: any) => (
-                <span key={p.id} className="bg-white/20 px-3 py-1 rounded-full text-sm">
+                <span key={p.id} className="bg-white/20 px-3 py-1 rounded-full text-sm animate-fade-in">
                   {p.username}
                 </span>
               ))}
@@ -105,18 +138,15 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
     )
   }
 
-  // --- ÉTAT 2 : JEU (IN_PROGRESS) ---
+  // --- ÉTAT 2 : JEU ---
   if (session.status === 'IN_PROGRESS') {
-    // Calcul du nombre de réponses pour la question actuelle
-    // Astuce : on compare le nb total de réponses de l'élève avec l'index de la question
-    // (C'est une approximation pour le polling, ce sera plus précis avec WebSocket)
     const currentQIndex = session.current_question_index + 1
+    // Utilisation du flag backend 'has_answered'
     const answersCount = session.participants.filter((p: any) => p.has_answered).length
     const totalPlayers = session.participants.length
 
     return (
       <div className="min-h-screen bg-gray-100 p-4 md:p-8 flex flex-col md:flex-row gap-6">
-        {/* Colonne Gauche : Contrôles & Question */}
         <div className="flex-1 space-y-6">
           <div className="bg-white rounded-xl shadow-lg p-8">
             <div className="flex justify-between items-center mb-6">
@@ -128,14 +158,10 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
 
             <div className="text-center py-8">
               <div className="mb-4 text-sm font-medium text-gray-500 uppercase tracking-wide">Question en cours</div>
-              {/* Note: le texte exact de la question n'est pas renvoyé dans session detail pour le prof par défaut, 
-                  mais on peut l'imaginer ici si on modifie le serializer ou si on a le quiz en cache */}
               <h1 className="text-3xl font-bold text-gray-900">
-                {/* On pourrait afficher le texte ici si on l'ajoutait au serializer du prof */}
                 Question affichée aux élèves
               </h1>
               
-              {/* Barre de progression des réponses */}
               <div className="mt-8 max-w-md mx-auto">
                 <div className="flex justify-between text-sm text-gray-600 mb-1">
                   <span>Réponses reçues</span>
@@ -143,7 +169,7 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
                   <div 
-                    className="bg-blue-600 h-4 transition-all duration-500 ease-out"
+                    className="bg-blue-600 h-4 transition-all duration-300 ease-out"
                     style={{ width: `${(answersCount / totalPlayers) * 100}%` }}
                   ></div>
                 </div>
@@ -161,7 +187,6 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
           </div>
         </div>
 
-        {/* Colonne Droite : Classement en direct */}
         <div className="w-full md:w-80 bg-white rounded-xl shadow-lg flex flex-col overflow-hidden">
           <div className="p-4 bg-gray-50 border-b">
             <h3 className="font-bold text-gray-800">Classement en direct</h3>
@@ -178,15 +203,14 @@ export default function TeacherSessionView({ sessionId }: { sessionId: string })
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-900 truncate">
-                        {p.username} 
-                        {/* Petit point vert si a répondu */}
-                        {p.has_answered && <span className="ml-2 text-green-500 text-xs">✓ Répondu</span>}
-                    </p>
-                    <p className="text-xs text-gray-500">{p.answer_count} réponses</p>
+                  <p className="font-medium text-gray-900 truncate">
+                    {p.username}
+                    {p.has_answered && <span className="ml-2 text-green-500 text-xs font-bold">✓</span>}
+                  </p>
+                  <p className="text-xs text-gray-500">{p.answer_count} réponses</p>
                 </div>
                 <div className="font-bold text-blue-600">
-                  {p.score} pts
+                  {p.score}
                 </div>
               </div>
             ))}
