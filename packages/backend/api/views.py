@@ -13,8 +13,9 @@ from .serializers import (
     QuizDetailSerializer,
     QuizCreateUpdateSerializer,
     QuestionSerializer,
+    QuestionCreateUpdateSerializer,
 )
-from .models import Quiz, Question
+from .models import Quiz, Question, QuestionOption
 
 User = get_user_model()
 
@@ -218,4 +219,119 @@ class QuizViewSet(viewsets.ModelViewSet):
         """
         instance = self.get_object()
         serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+
+# ==================== ViewSets Question ====================
+
+class QuestionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet pour gérer les questions d'un quiz.
+
+    Endpoints disponibles :
+    - POST /api/quizzes/{quiz_id}/questions/ : Ajouter une question au quiz
+    - GET /api/questions/{id}/ : Détail d'une question
+    - PUT /api/questions/{id}/ : Modifier une question
+    - PATCH /api/questions/{id}/ : Modifier partiellement une question
+    - DELETE /api/questions/{id}/ : Supprimer une question
+
+    Permissions :
+    - Création : Enseignant propriétaire du quiz
+    - Modification/Suppression : Enseignant propriétaire du quiz
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = QuestionCreateUpdateSerializer
+
+    def get_queryset(self):
+        """
+        Retourne les questions des quiz appartenant à l'utilisateur connecté.
+
+        Bonnes pratiques :
+        - Filtrage par propriétaire du quiz pour la sécurité
+        - Préchargement des relations
+        - Ordre par défaut sur le champ 'order'
+        """
+        return Question.objects.filter(
+            quiz__created_by=self.request.user
+        ).select_related('quiz').prefetch_related('options').order_by('quiz', 'order')
+
+    def get_serializer_class(self):
+        """
+        Retourne le serializer approprié selon l'action.
+        """
+        if self.action in ['create', 'update', 'partial_update']:
+            return QuestionCreateUpdateSerializer
+        return QuestionSerializer
+
+    def create(self, request, *args, **kwargs):
+        """
+        Créer une nouvelle question pour un quiz spécifique.
+
+        POST /api/quizzes/{quiz_id}/questions/
+
+        Bonnes pratiques :
+        - Vérification que le quiz existe et appartient à l'utilisateur
+        - Assignment automatique du quiz à la question
+        - Gestion d'erreurs explicites
+        """
+        # Récupérer le quiz_id depuis l'URL (route imbriquée)
+        quiz_id = self.kwargs.get('quiz_pk')
+
+        if not quiz_id:
+            return Response(
+                {'error': 'L\'ID du quiz est requis.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Vérifier que le quiz existe et appartient à l'utilisateur
+        try:
+            quiz = Quiz.objects.get(id=quiz_id, created_by=request.user)
+        except Quiz.DoesNotExist:
+            return Response(
+                {'error': 'Quiz non trouvé ou vous n\'avez pas la permission.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Créer la question
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Assigner automatiquement le quiz
+        question = serializer.save(quiz=quiz)
+
+        # Retourner la question créée avec ses options
+        response_serializer = QuestionSerializer(question)
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+    def perform_update(self, serializer):
+        """
+        Met à jour la question en vérifiant que l'utilisateur est propriétaire du quiz.
+        """
+        question = self.get_object()
+        if question.quiz.created_by != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Vous n'avez pas la permission de modifier cette question.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        """
+        Supprime la question en vérifiant que l'utilisateur est propriétaire du quiz.
+        """
+        if instance.quiz.created_by != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Vous n'avez pas la permission de supprimer cette question.")
+        instance.delete()
+
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Récupère le détail d'une question avec ses options.
+
+        GET /api/questions/{id}/
+        """
+        instance = self.get_object()
+        serializer = QuestionSerializer(instance)
         return Response(serializer.data)
