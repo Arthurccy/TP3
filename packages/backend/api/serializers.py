@@ -213,23 +213,35 @@ class QuizCreateUpdateSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-# ==================== Sérialiseurs Réponses ====================
+# ==================== Sérialiseurs Question ====================
 
-class AnswerCreateSerializer(serializers.Serializer):
-    """Payload attendu pour la soumission d'une réponse."""
+class QuestionOptionCreateSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour créer/modifier une option de question.
+    Utilisé lors de la création/modification de questions.
+    """
 
-    questionId = serializers.IntegerField()
-    selectedOptionId = serializers.IntegerField(required=False, allow_null=True)
-    textAnswer = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    responseTime = serializers.IntegerField(min_value=0)
+    class Meta:
+        model = QuestionOption
+        fields = ['text', 'is_correct', 'order']
+
+    def validate_text(self, value):
+        """Valider que le texte de l'option n'est pas vide"""
+        if not value or not value.strip():
+            raise serializers.ValidationError("Le texte de l'option ne peut pas être vide.")
+        return value.strip()
 
 
-class AnswerSerializer(serializers.ModelSerializer):
-    """Sérialiseur de réponse créé, retourné au client."""
+class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour créer ou modifier une question avec ses options.
+    Gère la création atomique de la question et de ses options.
 
-    question_id = serializers.IntegerField(source='question.id', read_only=True)
-    selected_option_id = serializers.IntegerField(source='selected_option.id', read_only=True)
-    participant_id = serializers.IntegerField(source='participant.id', read_only=True)
+    Utilisé pour POST /api/quizzes/{quiz_id}/questions/
+    et PUT/PATCH /api/questions/{id}/
+    """
+
+    options = QuestionOptionCreateSerializer(many=True, required=False)
 
     class Meta:
         model = Question
@@ -331,6 +343,39 @@ class AnswerSerializer(serializers.ModelSerializer):
                 QuestionOption.objects.create(question=instance, **option_data)
 
         return instance
+
+
+# ==================== Sérialiseurs Réponses (utilisés par les vues de vos collègues) ====================
+
+class AnswerCreateSerializer(serializers.Serializer):
+    """Payload attendu pour la soumission d'une réponse."""
+
+    questionId = serializers.IntegerField()
+    selectedOptionId = serializers.IntegerField(required=False, allow_null=True)
+    textAnswer = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    responseTime = serializers.IntegerField(min_value=0)
+
+
+class AnswerReadSerializer(serializers.ModelSerializer):
+    """Sérialiseur de réponse créé, retourné au client."""
+
+    question_id = serializers.IntegerField(source='question.id', read_only=True)
+    selected_option_id = serializers.IntegerField(source='selected_option.id', read_only=True)
+    participant_id = serializers.IntegerField(source='participant.id', read_only=True)
+
+    class Meta:
+        model = Answer
+        fields = [
+            'id',
+            'participant_id',
+            'question_id',
+            'selected_option_id',
+            'text_answer',
+            'is_correct',
+            'response_time',
+            'answered_at'
+        ]
+        read_only_fields = ['id', 'is_correct', 'answered_at']
 
 
 # ==================== Sérialiseurs Session ====================
@@ -453,7 +498,7 @@ class QuizSessionCreateSerializer(serializers.ModelSerializer):
         if QuizSession.objects.filter(
             quiz=quiz,
             host=request.user,
-            status__in=[QuizSession.SessionStatus.WAITING, QuizSession.SessionStatus.IN_PROGRESS]
+            status__in=[QuizSession.Status.WAITING, QuizSession.Status.IN_PROGRESS]
         ).exists():
             raise serializers.ValidationError({
                 "quiz": "Une session active existe déjà pour ce quiz. Terminez-la avant d'en créer une nouvelle."
@@ -485,7 +530,10 @@ class ParticipantSerializer(serializers.ModelSerializer):
         source='user.username',
         read_only=True
     )
-    answer_count = serializers.ReadOnlyField()
+    answer_count = serializers.IntegerField(
+        source='total_answers_count',
+        read_only=True
+    )
 
     class Meta:
         model = Participant
@@ -529,7 +577,7 @@ class ParticipantJoinSerializer(serializers.Serializer):
             raise serializers.ValidationError("Code d'accès invalide.")
 
         # Vérifier que la session est en attente (pas encore commencée ou terminée)
-        if session.status != QuizSession.SessionStatus.WAITING:
+        if session.status != QuizSession.Status.WAITING:
             raise serializers.ValidationError(
                 "Cette session n'accepte plus de nouveaux participants."
             )
@@ -598,11 +646,10 @@ class AnswerSerializer(serializers.ModelSerializer):
             'selected_option_text',
             'text_answer',
             'is_correct',
-            'points_earned',
-            'time_taken',
+            'response_time',
             'answered_at'
         ]
-        read_only_fields = ['id', 'is_correct', 'points_earned', 'answered_at']
+        read_only_fields = ['id', 'is_correct', 'answered_at']
 
 
 class AnswerSubmitSerializer(serializers.ModelSerializer):
@@ -613,21 +660,21 @@ class AnswerSubmitSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Answer
-        fields = ['id', 'selected_option', 'text_answer', 'time_taken']
+        fields = ['id', 'selected_option', 'text_answer', 'response_time']
         read_only_fields = ['id']
 
-    def validate_time_taken(self, value):
+    def validate_response_time(self, value):
         """
         Valider que le temps pris est raisonnable.
         """
         if value < 0:
             raise serializers.ValidationError("Le temps ne peut pas être négatif.")
 
-        # Vérifier que le temps ne dépasse pas la limite de la question
+        # Vérifier que le temps ne dépasse pas la limite de la question (en millisecondes)
         question = self.context.get('question')
-        if question and value > question.time_limit:
+        if question and value > (question.time_limit * 1000):
             raise serializers.ValidationError(
-                f"Le temps pris ({value}s) dépasse la limite de la question ({question.time_limit}s)."
+                f"Le temps pris ({value}ms) dépasse la limite de la question ({question.time_limit * 1000}ms)."
             )
 
         return value
@@ -686,47 +733,19 @@ class AnswerSubmitSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """
-        Créer une réponse et calculer automatiquement si elle est correcte.
+        Créer une réponse. Le modèle Answer gère automatiquement:
+        - Le calcul de is_correct
+        - La mise à jour du score du participant
         """
         question = self.context.get('question')
         participant = self.context.get('participant')
-        selected_option = validated_data.get('selected_option')
-        text_answer = validated_data.get('text_answer', '').strip()
 
-        # Déterminer si la réponse est correcte
-        is_correct = False
-        points_earned = 0
-
-        if question.question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
-            # Pour les QCM, vérifier si l'option sélectionnée est correcte
-            is_correct = selected_option.is_correct if selected_option else False
-
-        elif question.question_type == Question.QuestionType.SHORT_ANSWER:
-            # Pour les réponses courtes, comparer avec les options correctes (insensible à la casse)
-            correct_answers = question.options.filter(is_correct=True).values_list('text', flat=True)
-            is_correct = any(
-                text_answer.lower() == correct.lower()
-                for correct in correct_answers
-            )
-
-        # Calculer les points (exemple simple : 100 points si correct, 0 sinon)
-        if is_correct:
-            points_earned = 100
-
-        # Créer la réponse
+        # Le modèle Answer.save() gère automatiquement is_correct et le score
         answer = Answer.objects.create(
             participant=participant,
             question=question,
-            selected_option=selected_option,
-            text_answer=text_answer,
-            is_correct=is_correct,
-            points_earned=points_earned,
-            time_taken=validated_data.get('time_taken', 0)
+            **validated_data
         )
-
-        # Mettre à jour le score du participant
-        participant.score += points_earned
-        participant.save()
 
         return answer
 

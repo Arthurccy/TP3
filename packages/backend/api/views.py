@@ -16,7 +16,7 @@ from .serializers import (
     QuizCreateUpdateSerializer,
     QuestionSerializer,
     AnswerCreateSerializer,
-    AnswerSerializer,
+    AnswerReadSerializer,
 )
 from .models import (
     Quiz,
@@ -306,4 +306,4 @@ def submit_answer(request, session_id):
             is_correct=is_correct,
         )
 
-    return Response(AnswerSerializer(answer).data, status=status.HTTP_201_CREATED)
+    return Response(AnswerReadSerializer(answer).data, status=status.HTTP_201_CREATED)
