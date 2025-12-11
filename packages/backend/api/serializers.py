@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import Quiz, Question, QuestionOption
+from .models import Quiz, Question, QuestionOption, QuizSession, Participant, Answer
 
 User = get_user_model()
 
@@ -343,3 +343,451 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
                 QuestionOption.objects.create(question=instance, **option_data)
 
         return instance
+
+
+# ==================== Sérialiseurs Session ====================
+
+class QuizSessionListSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur léger pour la liste des sessions.
+    Utilisé pour GET /api/sessions/ (liste)
+    """
+
+    quiz_title = serializers.CharField(
+        source='quiz.title',
+        read_only=True
+    )
+    host_name = serializers.CharField(
+        source='host.get_full_name',
+        read_only=True
+    )
+    participant_count = serializers.ReadOnlyField()
+
+    class Meta:
+        model = QuizSession
+        fields = [
+            'id',
+            'quiz',
+            'quiz_title',
+            'host',
+            'host_name',
+            'access_code',
+            'status',
+            'participant_count',
+            'started_at',
+            'ended_at',
+            'created_at'
+        ]
+        read_only_fields = ['id', 'access_code', 'created_at', 'started_at', 'ended_at']
+
+
+class QuizSessionDetailSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur détaillé pour une session (avec quiz complet et participants).
+    Utilisé pour GET /api/sessions/{id}/ (détail)
+    """
+
+    quiz = QuizDetailSerializer(read_only=True)
+    host_name = serializers.CharField(
+        source='host.get_full_name',
+        read_only=True
+    )
+    participant_count = serializers.ReadOnlyField()
+    participants = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuizSession
+        fields = [
+            'id',
+            'quiz',
+            'host',
+            'host_name',
+            'access_code',
+            'status',
+            'participant_count',
+            'participants',
+            'started_at',
+            'ended_at',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'access_code', 'host', 'created_at', 'updated_at', 'started_at', 'ended_at']
+
+    def get_participants(self, obj):
+        """
+        Retourne la liste des participants avec leurs statistiques.
+        """
+        participants = obj.participants.all().order_by('-score', 'user__username')
+        return ParticipantSerializer(participants, many=True).data
+
+
+class QuizSessionCreateSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour créer une session de quiz.
+    Utilisé pour POST /api/sessions/
+    """
+
+    class Meta:
+        model = QuizSession
+        fields = ['id', 'quiz', 'access_code']
+        read_only_fields = ['id', 'access_code']
+
+    def validate_quiz(self, value):
+        """
+        Valider que le quiz existe et appartient à l'utilisateur connecté.
+        """
+        request = self.context.get('request')
+        if not request:
+            raise serializers.ValidationError("Contexte de requête manquant.")
+
+        # Vérifier que le quiz appartient à l'utilisateur
+        if value.created_by != request.user:
+            raise serializers.ValidationError(
+                "Vous ne pouvez créer une session que pour vos propres quiz."
+            )
+
+        # Vérifier que le quiz a au moins une question
+        if not value.questions.exists():
+            raise serializers.ValidationError(
+                "Le quiz doit contenir au moins une question pour créer une session."
+            )
+
+        return value
+
+    def validate(self, attrs):
+        """
+        Validation globale avant création.
+        """
+        quiz = attrs.get('quiz')
+        request = self.context.get('request')
+
+        # Vérifier qu'il n'y a pas déjà une session active pour ce quiz
+        if QuizSession.objects.filter(
+            quiz=quiz,
+            host=request.user,
+            status__in=[QuizSession.SessionStatus.WAITING, QuizSession.SessionStatus.IN_PROGRESS]
+        ).exists():
+            raise serializers.ValidationError({
+                "quiz": "Une session active existe déjà pour ce quiz. Terminez-la avant d'en créer une nouvelle."
+            })
+
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Créer une session avec génération automatique du code d'accès.
+        Le host est assigné automatiquement dans la vue.
+        """
+        return super().create(validated_data)
+
+
+# ==================== Sérialiseurs Participant ====================
+
+class ParticipantSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour lire les données d'un participant.
+    Utilisé pour GET /api/participants/ ou dans les détails de session.
+    """
+
+    user_name = serializers.CharField(
+        source='user.get_full_name',
+        read_only=True
+    )
+    username = serializers.CharField(
+        source='user.username',
+        read_only=True
+    )
+    answer_count = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Participant
+        fields = [
+            'id',
+            'session',
+            'user',
+            'user_name',
+            'username',
+            'score',
+            'answer_count',
+            'joined_at'
+        ]
+        read_only_fields = ['id', 'score', 'joined_at']
+
+
+class ParticipantJoinSerializer(serializers.Serializer):
+    """
+    Sérialiseur pour rejoindre une session avec un code d'accès.
+    Utilisé pour POST /api/sessions/join/
+    """
+
+    access_code = serializers.CharField(
+        max_length=6,
+        min_length=6,
+        required=True,
+        help_text="Code d'accès à 6 caractères pour rejoindre la session"
+    )
+
+    def validate_access_code(self, value):
+        """
+        Valider que le code d'accès correspond à une session existante et active.
+        """
+        # Normaliser le code (uppercase)
+        value = value.upper()
+
+        # Vérifier qu'une session existe avec ce code
+        try:
+            session = QuizSession.objects.get(access_code=value)
+        except QuizSession.DoesNotExist:
+            raise serializers.ValidationError("Code d'accès invalide.")
+
+        # Vérifier que la session est en attente (pas encore commencée ou terminée)
+        if session.status != QuizSession.SessionStatus.WAITING:
+            raise serializers.ValidationError(
+                "Cette session n'accepte plus de nouveaux participants."
+            )
+
+        # Stocker la session pour l'utiliser dans create()
+        self.context['session'] = session
+
+        return value
+
+    def validate(self, attrs):
+        """
+        Validation globale avant de rejoindre.
+        """
+        request = self.context.get('request')
+        session = self.context.get('session')
+
+        # Vérifier que l'utilisateur ne participe pas déjà à cette session
+        if Participant.objects.filter(session=session, user=request.user).exists():
+            raise serializers.ValidationError({
+                "access_code": "Vous participez déjà à cette session."
+            })
+
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Créer un participant pour rejoindre la session.
+        """
+        request = self.context.get('request')
+        session = self.context.get('session')
+
+        participant = Participant.objects.create(
+            session=session,
+            user=request.user,
+            score=0
+        )
+
+        return participant
+
+
+# ==================== Sérialiseurs Answer ====================
+
+class AnswerSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour lire l'historique des réponses.
+    Utilisé pour GET /api/answers/ ou dans les détails de participant.
+    """
+
+    question_text = serializers.CharField(
+        source='question.text',
+        read_only=True
+    )
+    selected_option_text = serializers.CharField(
+        source='selected_option.text',
+        read_only=True
+    )
+
+    class Meta:
+        model = Answer
+        fields = [
+            'id',
+            'participant',
+            'question',
+            'question_text',
+            'selected_option',
+            'selected_option_text',
+            'text_answer',
+            'is_correct',
+            'points_earned',
+            'time_taken',
+            'answered_at'
+        ]
+        read_only_fields = ['id', 'is_correct', 'points_earned', 'answered_at']
+
+
+class AnswerSubmitSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour soumettre une réponse à une question.
+    Utilisé pour POST /api/sessions/{session_id}/questions/{question_id}/answer/
+    """
+
+    class Meta:
+        model = Answer
+        fields = ['id', 'selected_option', 'text_answer', 'time_taken']
+        read_only_fields = ['id']
+
+    def validate_time_taken(self, value):
+        """
+        Valider que le temps pris est raisonnable.
+        """
+        if value < 0:
+            raise serializers.ValidationError("Le temps ne peut pas être négatif.")
+
+        # Vérifier que le temps ne dépasse pas la limite de la question
+        question = self.context.get('question')
+        if question and value > question.time_limit:
+            raise serializers.ValidationError(
+                f"Le temps pris ({value}s) dépasse la limite de la question ({question.time_limit}s)."
+            )
+
+        return value
+
+    def validate(self, attrs):
+        """
+        Validation globale selon le type de question.
+        """
+        question = self.context.get('question')
+        participant = self.context.get('participant')
+        selected_option = attrs.get('selected_option')
+        text_answer = attrs.get('text_answer')
+
+        # Vérifier que la question est fournie dans le contexte
+        if not question:
+            raise serializers.ValidationError("Question manquante dans le contexte.")
+
+        # Vérifier que le participant n'a pas déjà répondu à cette question
+        if Answer.objects.filter(participant=participant, question=question).exists():
+            raise serializers.ValidationError("Vous avez déjà répondu à cette question.")
+
+        # Validation selon le type de question
+        if question.question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
+            # Pour les QCM et Vrai/Faux, une option doit être sélectionnée
+            if not selected_option:
+                raise serializers.ValidationError({
+                    "selected_option": "Vous devez sélectionner une option pour ce type de question."
+                })
+
+            # Vérifier que l'option appartient bien à cette question
+            if selected_option.question != question:
+                raise serializers.ValidationError({
+                    "selected_option": "Cette option n'appartient pas à la question."
+                })
+
+            # Pas de texte pour les QCM
+            if text_answer:
+                raise serializers.ValidationError({
+                    "text_answer": "Les réponses textuelles ne sont pas acceptées pour ce type de question."
+                })
+
+        elif question.question_type == Question.QuestionType.SHORT_ANSWER:
+            # Pour les réponses courtes, un texte doit être fourni
+            if not text_answer or not text_answer.strip():
+                raise serializers.ValidationError({
+                    "text_answer": "Vous devez fournir une réponse textuelle pour ce type de question."
+                })
+
+            # Pas d'option pour les réponses courtes
+            if selected_option:
+                raise serializers.ValidationError({
+                    "selected_option": "Les options ne sont pas acceptées pour les questions à réponse courte."
+                })
+
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Créer une réponse et calculer automatiquement si elle est correcte.
+        """
+        question = self.context.get('question')
+        participant = self.context.get('participant')
+        selected_option = validated_data.get('selected_option')
+        text_answer = validated_data.get('text_answer', '').strip()
+
+        # Déterminer si la réponse est correcte
+        is_correct = False
+        points_earned = 0
+
+        if question.question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
+            # Pour les QCM, vérifier si l'option sélectionnée est correcte
+            is_correct = selected_option.is_correct if selected_option else False
+
+        elif question.question_type == Question.QuestionType.SHORT_ANSWER:
+            # Pour les réponses courtes, comparer avec les options correctes (insensible à la casse)
+            correct_answers = question.options.filter(is_correct=True).values_list('text', flat=True)
+            is_correct = any(
+                text_answer.lower() == correct.lower()
+                for correct in correct_answers
+            )
+
+        # Calculer les points (exemple simple : 100 points si correct, 0 sinon)
+        if is_correct:
+            points_earned = 100
+
+        # Créer la réponse
+        answer = Answer.objects.create(
+            participant=participant,
+            question=question,
+            selected_option=selected_option,
+            text_answer=text_answer,
+            is_correct=is_correct,
+            points_earned=points_earned,
+            time_taken=validated_data.get('time_taken', 0)
+        )
+
+        # Mettre à jour le score du participant
+        participant.score += points_earned
+        participant.save()
+
+        return answer
+
+
+# ==================== Sérialiseurs Leaderboard ====================
+
+class LeaderboardEntrySerializer(serializers.Serializer):
+    """
+    Sérialiseur pour les entrées du classement.
+    Utilisé pour GET /api/sessions/{id}/leaderboard/
+
+    Bonnes pratiques :
+    - Serializer (pas ModelSerializer) car données agrégées, pas directement du modèle
+    - Read-only pour toutes les statistiques calculées
+    """
+
+    rank = serializers.IntegerField(
+        read_only=True,
+        help_text="Position dans le classement (1 = premier)"
+    )
+    user_id = serializers.IntegerField(
+        read_only=True,
+        help_text="ID de l'utilisateur"
+    )
+    username = serializers.CharField(
+        read_only=True,
+        help_text="Nom d'utilisateur"
+    )
+    full_name = serializers.CharField(
+        read_only=True,
+        help_text="Nom complet de l'utilisateur"
+    )
+    score = serializers.IntegerField(
+        read_only=True,
+        help_text="Score total du participant"
+    )
+    answer_count = serializers.IntegerField(
+        read_only=True,
+        help_text="Nombre de réponses soumises"
+    )
+    correct_count = serializers.IntegerField(
+        read_only=True,
+        help_text="Nombre de réponses correctes"
+    )
+    accuracy = serializers.FloatField(
+        read_only=True,
+        help_text="Taux de réussite en pourcentage (0-100)"
+    )
+    average_time = serializers.FloatField(
+        read_only=True,
+        help_text="Temps moyen de réponse en secondes"
+    )
