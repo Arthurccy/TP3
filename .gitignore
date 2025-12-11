@@ -40,4 +40,10 @@ yarn-error.log*
 
 # OS
 Thumbs.db
+<<<<<<< HEAD
 claude.md
+=======
+
+claude.md 
+TP3.pdf 
+>>>>>>> 311648f87ba276d76f7235d8b1c3a9c32f96cd6f
