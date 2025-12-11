@@ -1,8 +1,14 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 app_name = 'api'
+
+# Configuration du router pour les ViewSets
+# Le DefaultRouter génère automatiquement les URLs CRUD standard
+router = DefaultRouter()
+router.register(r'quizzes', views.QuizViewSet, basename='quiz')
 
 urlpatterns = [
     path('health/', views.health_check, name='health'),
@@ -12,4 +18,15 @@ urlpatterns = [
     path('auth/login/', views.CustomTokenObtainPairView.as_view(), name='login'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/me/', views.CurrentUserView.as_view(), name='current_user'),
+
+    # URLs générées par le router (Quiz ViewSet)
+    # Génère automatiquement :
+    # - GET    /api/quizzes/              -> list
+    # - POST   /api/quizzes/              -> create
+    # - GET    /api/quizzes/{id}/         -> retrieve
+    # - PUT    /api/quizzes/{id}/         -> update
+    # - PATCH  /api/quizzes/{id}/         -> partial_update
+    # - DELETE /api/quizzes/{id}/         -> destroy
+    # - GET    /api/quizzes/{id}/questions/ -> action personnalisée
+    path('', include(router.urls)),
 ]

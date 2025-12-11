@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from .models import Quiz, Question, QuestionOption
 
 User = get_user_model()
 
@@ -101,3 +102,112 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data['user'] = UserSerializer(self.user).data
 
         return data
+
+
+# ==================== Sérialiseurs Quiz ====================
+
+class QuestionOptionSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les options de réponse"""
+
+    class Meta:
+        model = QuestionOption
+        fields = ['id', 'text', 'is_correct', 'order']
+        read_only_fields = ['id']
+
+    def validate_order(self, value):
+        """Valider que l'ordre est positif"""
+        if value < 0:
+            raise serializers.ValidationError("L'ordre doit être un nombre positif.")
+        return value
+
+
+class QuestionSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les questions (lecture seule pour la liste)"""
+
+    options = QuestionOptionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Question
+        fields = ['id', 'text', 'question_type', 'order', 'time_limit', 'options']
+        read_only_fields = ['id']
+
+
+class QuizListSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour la liste des quiz (sans les questions).
+    Utilisé pour GET /api/quizzes/ (liste)
+    """
+
+    created_by_name = serializers.CharField(
+        source='created_by.get_full_name',
+        read_only=True
+    )
+    question_count = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Quiz
+        fields = [
+            'id',
+            'title',
+            'description',
+            'created_by',
+            'created_by_name',
+            'question_count',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+
+class QuizDetailSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur détaillé pour un quiz (avec les questions).
+    Utilisé pour GET /api/quizzes/{id}/ (détail)
+    """
+
+    questions = QuestionSerializer(many=True, read_only=True)
+    created_by_name = serializers.CharField(
+        source='created_by.get_full_name',
+        read_only=True
+    )
+    question_count = serializers.ReadOnlyField()
+
+    class Meta:
+        model = Quiz
+        fields = [
+            'id',
+            'title',
+            'description',
+            'created_by',
+            'created_by_name',
+            'question_count',
+            'questions',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+
+class QuizCreateUpdateSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour créer ou modifier un quiz.
+    Utilisé pour POST /api/quizzes/ et PUT/PATCH /api/quizzes/{id}/
+    """
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'title', 'description']
+        read_only_fields = ['id']
+
+    def validate_title(self, value):
+        """Valider que le titre n'est pas vide"""
+        if not value or not value.strip():
+            raise serializers.ValidationError("Le titre ne peut pas être vide.")
+        return value.strip()
+
+    def create(self, validated_data):
+        """
+        Créer un quiz en assignant automatiquement l'utilisateur connecté comme créateur.
+        """
+        # Le created_by est automatiquement assigné dans la vue
+        return super().create(validated_data)
