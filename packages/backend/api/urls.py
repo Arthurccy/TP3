@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_nested import routers
 from . import views
+from .views import submit_answer
 
 app_name = 'api'
 
@@ -46,5 +47,6 @@ urlpatterns = [
     # - POST   /api/quizzes/{quiz_id}/questions/ -> create (ajouter une question au quiz)
 
     path('', include(router.urls)),
+    path('sessions/<uuid:session_id>/answer/', submit_answer, name='submit_answer'),
     path('', include(quiz_router.urls)),
 ]
