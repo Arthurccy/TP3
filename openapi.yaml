@@ -1,0 +1,104 @@
+### 2. `openapi.yaml` (La spec API)
+```yaml
+openapi: 3.0.0
+info:
+  title: Quiz Platform API
+  version: 1.0.0
+  description: API Django REST Framework pour la gestion des quiz et sessions.
+
+servers:
+  - url: http://localhost:8000/api
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login/:
+    post:
+      summary: Connexion utilisateur
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: Succès (Retourne Access + Refresh tokens)
+
+  /auth/register/:
+    post:
+      summary: Inscription
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password, role]
+              properties:
+                username: { type: string }
+                email: { type: string }
+                password: { type: string }
+                role: { type: string, enum: [TEACHER, STUDENT] }
+
+  /quizzes/:
+    get:
+      summary: Liste des quiz (Enseignant uniquement)
+    post:
+      summary: Créer un nouveau quiz
+
+  /quizzes/{id}/:
+    get:
+      summary: Détails d'un quiz
+    put:
+      summary: Modifier un quiz
+    delete:
+      summary: Supprimer un quiz
+
+  /sessions/:
+    post:
+      summary: Créer une session (Lobby)
+      description: Génère un code d'accès unique.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quiz: { type: integer }
+
+  /sessions/join/:
+    post:
+      summary: Rejoindre une session (Étudiant)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                access_code: { type: string }
+
+  /sessions/{id}/start/:
+    post:
+      summary: Démarrer le jeu (Passe le statut à IN_PROGRESS)
+
+  /sessions/{id}/answer/:
+    post:
+      summary: Soumettre une réponse
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                selected_option: { type: integer }
+                response_time: { type: integer }
