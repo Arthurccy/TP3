@@ -213,35 +213,23 @@ class QuizCreateUpdateSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-# ==================== Sérialiseurs Question ====================
+# ==================== Sérialiseurs Réponses ====================
 
-class QuestionOptionCreateSerializer(serializers.ModelSerializer):
-    """
-    Sérialiseur pour créer/modifier une option de question.
-    Utilisé lors de la création/modification de questions.
-    """
+class AnswerCreateSerializer(serializers.Serializer):
+    """Payload attendu pour la soumission d'une réponse."""
 
-    class Meta:
-        model = QuestionOption
-        fields = ['text', 'is_correct', 'order']
-
-    def validate_text(self, value):
-        """Valider que le texte de l'option n'est pas vide"""
-        if not value or not value.strip():
-            raise serializers.ValidationError("Le texte de l'option ne peut pas être vide.")
-        return value.strip()
+    questionId = serializers.IntegerField()
+    selectedOptionId = serializers.IntegerField(required=False, allow_null=True)
+    textAnswer = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    responseTime = serializers.IntegerField(min_value=0)
 
 
-class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
-    """
-    Sérialiseur pour créer ou modifier une question avec ses options.
-    Gère la création atomique de la question et de ses options.
+class AnswerSerializer(serializers.ModelSerializer):
+    """Sérialiseur de réponse créé, retourné au client."""
 
-    Utilisé pour POST /api/quizzes/{quiz_id}/questions/
-    et PUT/PATCH /api/questions/{id}/
-    """
-
-    options = QuestionOptionCreateSerializer(many=True, required=False)
+    question_id = serializers.IntegerField(source='question.id', read_only=True)
+    selected_option_id = serializers.IntegerField(source='selected_option.id', read_only=True)
+    participant_id = serializers.IntegerField(source='participant.id', read_only=True)
 
     class Meta:
         model = Question

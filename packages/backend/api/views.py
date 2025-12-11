@@ -5,6 +5,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.contrib.auth import get_user_model
 
+from django.db import transaction
+
 from .serializers import (
     UserSerializer,
     RegisterSerializer,
@@ -13,9 +15,17 @@ from .serializers import (
     QuizDetailSerializer,
     QuizCreateUpdateSerializer,
     QuestionSerializer,
-    QuestionCreateUpdateSerializer,
+    AnswerCreateSerializer,
+    AnswerSerializer,
 )
-from .models import Quiz, Question, QuestionOption
+from .models import (
+    Quiz,
+    Question,
+    QuizSession,
+    Participant,
+    QuestionOption,
+    Answer,
+)
 
 User = get_user_model()
 
@@ -222,116 +232,78 @@ class QuizViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-# ==================== ViewSets Question ====================
+# ==================== Réponses ====================
 
-class QuestionViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet pour gérer les questions d'un quiz.
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_answer(request, session_id):
+    """Soumettre une réponse pour la question courante d'une session."""
 
-    Endpoints disponibles :
-    - POST /api/quizzes/{quiz_id}/questions/ : Ajouter une question au quiz
-    - GET /api/questions/{id}/ : Détail d'une question
-    - PUT /api/questions/{id}/ : Modifier une question
-    - PATCH /api/questions/{id}/ : Modifier partiellement une question
-    - DELETE /api/questions/{id}/ : Supprimer une question
+    serializer = AnswerCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
 
-    Permissions :
-    - Création : Enseignant propriétaire du quiz
-    - Modification/Suppression : Enseignant propriétaire du quiz
-    """
+    # Récupérer la session et la question courante
+    try:
+        session = QuizSession.objects.select_related('quiz').get(pk=session_id)
+    except QuizSession.DoesNotExist:
+        return Response({'detail': 'Session introuvable.'}, status=status.HTTP_404_NOT_FOUND)
 
-    permission_classes = [IsAuthenticated]
-    serializer_class = QuestionCreateUpdateSerializer
+    if session.status != QuizSession.Status.IN_PROGRESS:
+        return Response({'detail': "La session n'est pas en cours."}, status=status.HTTP_400_BAD_REQUEST)
 
-    def get_queryset(self):
-        """
-        Retourne les questions des quiz appartenant à l'utilisateur connecté.
+    current_question = session.get_current_question()
+    if not current_question:
+        return Response({'detail': 'Aucune question courante pour cette session.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        Bonnes pratiques :
-        - Filtrage par propriétaire du quiz pour la sécurité
-        - Préchargement des relations
-        - Ordre par défaut sur le champ 'order'
-        """
-        return Question.objects.filter(
-            quiz__created_by=self.request.user
-        ).select_related('quiz').prefetch_related('options').order_by('quiz', 'order')
+    if data['questionId'] != current_question.id:
+        return Response({'detail': 'Cette question ne correspond pas à la question courante.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    def get_serializer_class(self):
-        """
-        Retourne le serializer approprié selon l'action.
-        """
-        if self.action in ['create', 'update', 'partial_update']:
-            return QuestionCreateUpdateSerializer
-        return QuestionSerializer
+    # Vérifier que l'utilisateur est participant à la session
+    try:
+        participant = Participant.objects.get(session=session, user=request.user)
+    except Participant.DoesNotExist:
+        return Response({'detail': 'Vous ne participez pas à cette session.'}, status=status.HTTP_403_FORBIDDEN)
 
-    def create(self, request, *args, **kwargs):
-        """
-        Créer une nouvelle question pour un quiz spécifique.
+    # Empêcher les réponses multiples à la même question
+    if Answer.objects.filter(participant=participant, question=current_question).exists():
+        return Response({'detail': 'Vous avez déjà répondu à cette question.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        POST /api/quizzes/{quiz_id}/questions/
-
-        Bonnes pratiques :
-        - Vérification que le quiz existe et appartient à l'utilisateur
-        - Assignment automatique du quiz à la question
-        - Gestion d'erreurs explicites
-        """
-        # Récupérer le quiz_id depuis l'URL (route imbriquée)
-        quiz_id = self.kwargs.get('quiz_pk')
-
-        if not quiz_id:
-            return Response(
-                {'error': 'L\'ID du quiz est requis.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Vérifier que le quiz existe et appartient à l'utilisateur
+    selected_option = None
+    if data.get('selectedOptionId') is not None:
         try:
-            quiz = Quiz.objects.get(id=quiz_id, created_by=request.user)
-        except Quiz.DoesNotExist:
-            return Response(
-                {'error': 'Quiz non trouvé ou vous n\'avez pas la permission.'},
-                status=status.HTTP_404_NOT_FOUND
+            selected_option = QuestionOption.objects.get(
+                pk=data['selectedOptionId'],
+                question=current_question
             )
+        except QuestionOption.DoesNotExist:
+            return Response({'detail': "L'option sélectionnée n'appartient pas à cette question."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Créer la question
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+    # Règles de validation selon le type de question
+    if current_question.question_type in [Question.QuestionType.MULTIPLE_CHOICE, Question.QuestionType.TRUE_FALSE]:
+        if not selected_option:
+            return Response({'detail': 'selectedOptionId est requis pour cette question.'}, status=status.HTTP_400_BAD_REQUEST)
+    elif current_question.question_type == Question.QuestionType.SHORT_ANSWER:
+        if not data.get('textAnswer'):
+            return Response({'detail': 'textAnswer est requis pour cette question.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Assigner automatiquement le quiz
-        question = serializer.save(quiz=quiz)
+    # Déterminer la correction (utile pour les réponses texte)
+    is_correct = False
+    if selected_option:
+        is_correct = selected_option.is_correct
+    elif current_question.question_type == Question.QuestionType.SHORT_ANSWER:
+        user_answer = (data.get('textAnswer') or '').strip().lower()
+        correct_options = current_question.options.filter(is_correct=True)
+        is_correct = any(opt.text.strip().lower() == user_answer for opt in correct_options)
 
-        # Retourner la question créée avec ses options
-        response_serializer = QuestionSerializer(question)
-        return Response(
-            response_serializer.data,
-            status=status.HTTP_201_CREATED
+    with transaction.atomic():
+        answer = Answer.objects.create(
+            participant=participant,
+            question=current_question,
+            selected_option=selected_option,
+            text_answer=data.get('textAnswer') or '',
+            response_time=data['responseTime'],
+            is_correct=is_correct,
         )
 
-    def perform_update(self, serializer):
-        """
-        Met à jour la question en vérifiant que l'utilisateur est propriétaire du quiz.
-        """
-        question = self.get_object()
-        if question.quiz.created_by != self.request.user:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Vous n'avez pas la permission de modifier cette question.")
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        """
-        Supprime la question en vérifiant que l'utilisateur est propriétaire du quiz.
-        """
-        if instance.quiz.created_by != self.request.user:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Vous n'avez pas la permission de supprimer cette question.")
-        instance.delete()
-
-    def retrieve(self, request, *args, **kwargs):
-        """
-        Récupère le détail d'une question avec ses options.
-
-        GET /api/questions/{id}/
-        """
-        instance = self.get_object()
-        serializer = QuestionSerializer(instance)
-        return Response(serializer.data)
+    return Response(AnswerSerializer(answer).data, status=status.HTTP_201_CREATED)
