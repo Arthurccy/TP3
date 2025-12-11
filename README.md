@@ -1,179 +1,60 @@
-# TP3 Monorepo - Fullstack Application
+# Plateforme de Quiz Interactif (Full-Stack)
 
-Architecture fullstack avec **Next.js**, **Django REST**, **SQLite**, et **Socket.io** pour la communication temps réel.
+Une application de quiz en temps réel permettant aux enseignants de lancer des sessions et aux étudiants de répondre via leur appareil.
 
-## 📁 Structure du projet
+## 🏗 Architecture
 
-```
-tp3-monorepo/
-├── packages/
-│   ├── frontend/          # Application Next.js (React)
-│   ├── backend/           # API Django REST (Python)
-│   ├── api/               # Socket.io Server (Node.js/Express)
-│   └── shared/            # Types partagés
-├── QUICKSTART.md          # Guide de démarrage rapide
-└── README.md             # Ce fichier
-```
+Le projet est conçu comme un **Monorepo** regroupant trois services distincts :
 
-## 🚀 Démarrage Rapide
+1.  **Frontend (`/packages/frontend`)** :
+    * **Techno** : Next.js 14 (App Router), TypeScript, Tailwind CSS.
+    * **Rôle** : Interface utilisateur réactive. Gère l'affichage temps réel et la logique de jeu.
+2.  **Backend API (`/packages/backend`)** :
+    * **Techno** : Django REST Framework, SQLite.
+    * **Rôle** : Source de vérité unique. Gère l'authentification (JWT), les données (Quiz, Questions, Scores) et la validation métier.
+3.  **Serveur Temps Réel (`/packages/socket`)** :
+    * **Techno** : Node.js, Express, Socket.io.
+    * **Rôle** : Bus d'événements léger. Gère les "Rooms" de session et diffuse les signaux de mise à jour (`trigger_update` -> `session_updated`).
 
-**⚠️ Ouvre 3 terminaux séparés et lance chacune de ces commandes :**
+### 💡 Justification des choix techniques
 
-### Terminal 1 : Backend Django
+* **Pourquoi Node.js + Socket.io à côté de Django ?**
+    Bien que Django puisse gérer les WebSockets (via Channels), l'implémentation est souvent lourde (Redis requis, asgi). Nous avons choisi de déporter la charge temps réel sur un micro-service Node.js dédié, très performant pour les I/O, tout en gardant Django pour la robustesse de la gestion des données.
+* **Stratégie "Signaling" :**
+    Le WebSocket ne transporte pas les données métier (pour éviter la duplication de logique). Il sert de "signal". Quand une action a lieu, le socket prévient les clients qui re-fetch les données fraîches via l'API REST. Cela garantit que le Frontend est toujours synchronisé avec la base de données Django.
+
+## 🚀 Installation et Lancement
+
+### Prérequis
+* Node.js (v18+)
+* Python (v3.10+)
+
+### 1. Backend (Django)
 ```bash
 cd packages/backend
+# Créer l'environnement virtuel et installer les dépendances
 python -m venv venv
-venv\Scripts\activate          # Windows
-source venv/bin/activate       # macOS/Linux
-
+source venv/bin/activate  # ou venv\Scripts\activate sous Windows
 pip install -r requirements.txt
+
+# Migrations et démarrage
 python manage.py migrate
 python manage.py runserver
-```
+# > Tourne sur http://localhost:8000
 
-### Terminal 2 : Frontend Next.js
-```bash
-cd packages/frontend
+cd packages/socket
 npm install
 npm run dev
-```
+# > Tourne sur http://localhost:4000
 
-### Terminal 3 : API Socket.io
-```bash
-cd packages/api
-npm install
-npm run dev
-```
 
-## ✅ Vérification
-
-Ouvre ton navigateur et vérifie que tout fonctionne :
-
-| Service | URL | Statut |
-|---------|-----|--------|
-| Frontend | http://localhost:3000 | Doit charger l'app |
-| Backend | http://localhost:8000/api/health/ | Doit afficher `{"status": "healthy"}` |
-| Admin Django | http://localhost:8000/admin | Doit afficher la page login |
-| API Socket.io | http://localhost:8001 | Doit accepter les connexions |
-
-## 📦 Technologies
-
-| Composant | Stack |
-|-----------|-------|
-| **Frontend** | Next.js 14 + TypeScript + Tailwind CSS + Zustand + TanStack Query |
-| **Backend** | Django 4.2 + Django REST Framework + SQLite |
-| **API Temps réel** | Express.js + Socket.io |
-
-## 🔧 Configuration
-
-### Fichier `.env` du Backend
-
-Copier `.env.example` en `.env`.
-
-Les valeurs par défaut fonctionnent avec SQLite :
-```
-DEBUG=True
-SECRET_KEY=your-secret-key-here
-ALLOWED_HOSTS=localhost,127.0.0.1
-CORS_ALLOWED_ORIGINS=http://localhost:3000
-```
-
-## 📚 Commandes utiles
-
-### Backend Django
-```bash
-python manage.py migrate              # Appliquer les migrations
-python manage.py makemigrations       # Créer de nouvelles migrations
-python manage.py createsuperuser      # Créer un admin
-python manage.py shell                # Shell interactif Django
-```
-
-### Frontend Next.js
-```bash
-npm run dev                # Développement avec hot-reload
-npm run build              # Construire pour production
-npm start                  # Démarrer la version compilée
-npm run lint               # Vérifier le code
-```
-
-### API Socket.io
-```bash
-npm run dev                # Développement
-npm run build              # Compiler TypeScript
-npm start                  # Démarrer la version compilée
-```
-
-## 🔌 Utiliser Socket.io
-
-### Frontend (React)
-```typescript
-import { connectSocket } from '@/lib/socket'
-
-const socket = connectSocket()
-
-// Envoyer un message
-socket.emit('message', { text: 'Hello!' })
-
-// Recevoir des messages
-socket.on('message', (data) => {
-  console.log('Message:', data)
-})
-```
-
-## 🐛 Dépannage
-
-### ❌ "Module not found"
-```bash
-# Frontend
 cd packages/frontend
 npm install
+# Créer le fichier .env.local
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+echo "NEXT_PUBLIC_SOCKET_URL=http://localhost:4000" >> .env.local
 
-# Backend
-cd packages/backend
-pip install -r requirements.txt
-```
+npm run dev
+# > Tourne sur http://localhost:3000
 
-### ❌ "Port déjà utilisé"
-```bash
-# Frontend (port 3001)
-npm run dev -- -p 3001
-
-# Backend (port 8001)
-python manage.py runserver 8001
-```
-
-### ❌ "venv not activated"
-```bash
-# Windows
-venv\Scripts\activate
-
-# macOS/Linux
-source venv/bin/activate
-```
-
-### ❌ "django not found"
-```bash
-pip install -r requirements.txt
-```
-
-## 📖 Documentation
-
-- [Next.js](https://nextjs.org/docs)
-- [Django](https://docs.djangoproject.com/en/4.2/)
-- [Django REST Framework](https://www.django-rest-framework.org/)
-- [Socket.io](https://socket.io/docs/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- [Zustand](https://github.com/pmndrs/zustand)
-- [TanStack Query](https://tanstack.com/query/)
-
-## 💡 Notes importantes
-
-- **3 terminaux ouverts en même temps** = 3 services qui tournent en parallèle
-- **SQLite** = pas besoin d'installer PostgreSQL
-- **Développement local** = URLs en `localhost`
-- **Hot-reload activé** = modifie le code, ça recharge automatiquement
-- **Admin Django** = http://localhost:8000/admin
-
----
-
-**Besoin d'aide ?** Vérifiez le `QUICKSTART.md` pour des explications plus détaillées ! 🚀
+FIN
