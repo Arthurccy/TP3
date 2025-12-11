@@ -245,7 +245,8 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ['id', 'text', 'question_type', 'order', 'time_limit', 'options']
+        # AJOUTER 'quiz' DANS CETTE LISTE ▼
+        fields = ['id', 'quiz', 'text', 'question_type', 'order', 'time_limit', 'options'] 
         read_only_fields = ['id']
 
     def validate_text(self, value):
@@ -343,6 +344,15 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
                 QuestionOption.objects.create(question=instance, **option_data)
 
         return instance
+    
+    def validate_quiz(self, value):
+        """
+        Sécurité : On vérifie que l'utilisateur a le droit d'ajouter une question à ce quiz.
+        """
+        user = self.context['request'].user
+        if value.created_by != user:
+            raise serializers.ValidationError("Vous ne pouvez pas ajouter de questions au quiz d'un autre enseignant.")
+        return value
 
 
 # ==================== Sérialiseurs Réponses (utilisés par les vues de vos collègues) ====================
@@ -442,7 +452,6 @@ class QuizSessionDetailSerializer(serializers.ModelSerializer):
             'started_at',
             'ended_at',
             'created_at',
-            'updated_at'
         ]
         read_only_fields = ['id', 'access_code', 'host', 'created_at', 'updated_at', 'started_at', 'ended_at']
 
