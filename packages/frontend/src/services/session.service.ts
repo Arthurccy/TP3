@@ -2,6 +2,7 @@ import apiClient from '@/lib/api'
 
 // On définit l'interface ici pour la clarté
 interface QuizSession {
+  participants: never[]
   id: number
   access_code: string
   status: 'WAITING' | 'IN_PROGRESS' | 'COMPLETED'

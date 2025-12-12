@@ -1,14 +1,17 @@
 'use client'
 
-import { useEffect, useState } from 'react' // J'ai retiré 'use'
+// --- SUPPRIMER: import { useEffect, useState } from 'react' ---
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { quizService } from '@/services/quiz.service'
 import { questionService } from '@/services/question.service'
 import { Button } from '@/components/ui/Button'
 import { Quiz } from '@/types'
+// --- IMPORTATIONS TANSTACK QUERY ---
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+// -----------------------------------
 
-// Type temporaire pour une question
+// Type de question (afin de garder une structure claire)
 interface Question {
   id: number
   text: string
@@ -17,55 +20,76 @@ interface Question {
   order: number
 }
 
-// CORRECTION ICI : params n'est pas une Promise dans ta version
+// Type Quiz enrichi pour useQuery (Doit correspondre à ce que renvoie quizService.getById)
+type QuizWithQuestions = Quiz & { questions?: Question[] }
+
+
 export default function EditQuizPage({ params }: { params: { id: string } }) {
-  // On accède directement à l'ID sans utiliser use()
-  // Note: il faut s'assurer que l'ID est bien converti en string si besoin, mais params.id est déjà string
-  const id = params.id 
-  
+  const quizId = params.id 
   const router = useRouter()
-  const [quiz, setQuiz] = useState<Quiz | null>(null)
-  const [questions, setQuestions] = useState<Question[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const queryClient = useQueryClient()
 
-  // Le reste du code est identique...
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const quizData = await quizService.getById(id)
-        setQuiz(quizData)
-
-        if ((quizData as any).questions) {
-            setQuestions((quizData as any).questions)
-        }
-      } catch (err) {
-        console.error(err)
-        router.push('/dashboard')
-      } finally {
-        setIsLoading(false)
-      }
-    }
+  // 1. REQUÊTE (QUERY): Récupérer les détails du quiz et les questions
+  const { 
+    data: quiz, 
+    isLoading: isQuizLoading, 
+    error: fetchError 
+  } = useQuery<QuizWithQuestions>({
+    // Clé de cache unique pour ce quiz
+    queryKey: ['quiz', quizId], 
+    // Fonction de fetching
+    queryFn: () => quizService.getById(quizId),
+    // S'assurer que l'ID existe
+    enabled: !!quizId, 
+  })
+  
+  // 2. MUTATION: Supprimer une question
+  const deleteQuestionMutation = useMutation({
+    mutationFn: (questionId: number) => questionService.delete(questionId),
     
-    // On vérifie que l'ID existe avant de lancer la requête
-    if (id) {
-        fetchData()
+    // Après le succès, invalider la requête 'quiz' pour re-fetch la liste à jour
+    onSuccess: () => {
+      // Invalider le cache du quiz spécifique (clé ['quiz', quizId])
+      queryClient.invalidateQueries({ queryKey: ['quiz', quizId] }) 
+      // Optionnel : Afficher un message de succès (ou utiliser une librairie de toast)
+    },
+    
+    onError: (err: any) => {
+      console.error("Erreur suppression:", err)
+      const message = err.response?.data?.detail || "Erreur lors de la suppression de la question."
+      alert(message)
     }
-  }, [id, router])
+  })
 
-  // ... (Garde tout le reste du return inchangé)
-  const handleDeleteQuestion = async (questionId: number) => {
-    if(!confirm("Supprimer cette question ?")) return
-    try {
-      await questionService.delete(questionId)
-      setQuestions(questions.filter(q => q.id !== questionId))
-    } catch (err) {
-      alert("Erreur suppression")
-    }
+  // 3. Gestionnaire de suppression (utilise la mutation)
+  const handleDeleteQuestion = (questionId: number) => {
+    // Empêcher les soumissions multiples
+    if (deleteQuestionMutation.isPending) return;
+
+    if(!confirm("Êtes-vous sûr de vouloir supprimer cette question ?")) return
+    
+    // Déclencher la mutation
+    deleteQuestionMutation.mutate(questionId)
   }
 
-  if (isLoading) return <div className="p-10 text-center">Chargement...</div>
+  // 4. Affichage des états de la requête (Query)
+  if (isQuizLoading) return <div className="p-10 text-center">Chargement...</div>
+  
+  if (fetchError) {
+    // Si une erreur de chargement se produit, afficher un message d'erreur
+    console.error("Erreur de chargement du quiz:", fetchError)
+    // Optional: Redirection si le quiz n'existe pas
+    // router.push('/dashboard') 
+    return <div className="p-10 text-center text-red-600">Erreur lors du chargement du quiz : {fetchError.message || "Quiz introuvable ou erreur de connexion."}</div>
+  }
+  
+  // Si les données sont chargées et que quiz est défini
   if (!quiz) return null
 
+  // Données prêtes pour le rendu
+  const questions: Question[] = quiz.questions || []
+  const isDeleting = deleteQuestionMutation.isPending // État de chargement pour la suppression
+  
   return (
     <div className="max-w-4xl mx-auto py-10 px-4">
       {/* Header */}
@@ -88,7 +112,7 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="p-6 border-b border-gray-200 flex justify-between items-center">
             <h2 className="text-xl font-semibold">Questions ({questions.length})</h2>
-            <Link href={`/quiz/${id}/question/new`}>
+            <Link href={`/quiz/${quizId}/question/new`}>
                 <Button className="w-auto text-sm">
                     + Ajouter une question
                 </Button>
@@ -120,9 +144,11 @@ export default function EditQuizPage({ params }: { params: { id: string } }) {
                         <div className="flex gap-2">
                             <button 
                                 onClick={() => handleDeleteQuestion(q.id)}
-                                className="text-red-600 hover:bg-red-50 p-2 rounded"
+                                // Désactiver le bouton pendant la suppression
+                                disabled={isDeleting} 
+                                className={`text-red-600 hover:bg-red-50 p-2 rounded ${isDeleting ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
-                                🗑
+                                {isDeleting ? '...' : '🗑'}
                             </button>
                         </div>
                     </div>

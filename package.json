@@ -15,5 +15,8 @@
   },
   "devDependencies": {
     "turbo": "^1.10.16"
+  },
+  "dependencies": {
+    "@tanstack/react-query-devtools": "^5.91.1"
   }
 }

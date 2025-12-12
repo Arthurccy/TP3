@@ -8,3 +8,4 @@ python-engineio==4.8.0
 psycopg[binary]==3.2.13
 python-dotenv==1.0.0
 gunicorn==21.2.0
+@tanstack/react-query-devtools

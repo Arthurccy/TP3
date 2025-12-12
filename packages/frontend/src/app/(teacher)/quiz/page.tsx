@@ -5,31 +5,66 @@ import { useRouter } from 'next/navigation'
 import { quizService } from '@/services/quiz.service'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+// --- IMPORTATIONS TANSTACK QUERY ---
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+// -----------------------------------
+
+// Type pour le payload du formulaire
+interface QuizFormData {
+    title: string
+    description: string
+}
 
 export default function CreateQuizPage() {
   const router = useRouter()
-  const [isLoading, setIsLoading] = useState(false)
-  const [formData, setFormData] = useState({
+  
+  // États locaux pour le formulaire et les erreurs de validation
+  const [formData, setFormData] = useState<QuizFormData>({
     title: '',
     description: ''
   })
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
+  // 1. CONFIGURATION TANSTACK QUERY
+  const queryClient = useQueryClient()
 
-    try {
-      // 1. On crée le quiz
-      const newQuiz = await quizService.create(formData)
-      // 2. On redirige vers la page d'édition pour ajouter des questions
+  const createQuizMutation = useMutation({
+    // La fonction qui effectue l'appel API
+    mutationFn: (data: QuizFormData) => quizService.create(data),
+    
+    // Logique après succès
+    onSuccess: (newQuiz) => {
+      // 1. Invalider le cache de la liste des quiz (clé 'quizzes') pour rafraîchir le Dashboard
+      queryClient.invalidateQueries({ queryKey: ['quizzes'] })
+      
+      // 2. Rediriger vers la page d'édition pour ajouter des questions
       router.push(`/quiz/${newQuiz.id}`)
-    } catch (error) {
-      console.error(error)
-      alert("Erreur lors de la création du quiz")
-    } finally {
-      setIsLoading(false)
+    },
+    
+    // Logique en cas d'échec
+    onError: (error: any) => {
+      console.error("Erreur lors de la création du quiz:", error)
+      // Afficher l'erreur à l'utilisateur
+      setSubmitError(error.response?.data?.detail || "Erreur lors de la création du quiz")
+    },
+  })
+
+  // 2. GESTIONNAIRE DE SOUMISSION MODIFIÉ
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitError(null) // Réinitialiser l'erreur
+
+    // Validation simple avant la mutation
+    if (!formData.title.trim()) {
+        setSubmitError("Le titre du quiz est requis.")
+        return
     }
+
+    // Déclencher la mutation avec les données du formulaire
+    createQuizMutation.mutate(formData)
   }
+
+  const isLoading = createQuizMutation.isPending; // Utilisation de l'état de la mutation
 
   return (
     <div className="max-w-2xl mx-auto py-10 px-4">
@@ -57,11 +92,23 @@ export default function CreateQuizPage() {
             />
           </div>
 
+          {/* Affichage des erreurs (locales ou de la mutation) */}
+          {(submitError || createQuizMutation.isError) && (
+             <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded text-sm text-center">
+                {submitError || (createQuizMutation.error as any).response?.data?.detail || "Erreur inconnue."}
+             </div>
+          )}
+
           <div className="flex gap-4 pt-4">
             <Button type="button" variant="outline" onClick={() => router.back()}>
               Annuler
             </Button>
-            <Button type="submit" isLoading={isLoading}>
+            <Button 
+              type="submit" 
+              // Utilisation de l'état de chargement de la mutation
+              isLoading={isLoading} 
+              disabled={isLoading}
+            >
               Suivant : Ajouter des questions
             </Button>
           </div>
