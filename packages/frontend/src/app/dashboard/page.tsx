@@ -9,10 +9,16 @@ import { sessionService } from '@/services/session.service'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { User, UserRole, Quiz } from '@/types'
+// Tous les hooks nécessaires sont importés ici
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query' 
 
+// =================================================================
+// --- COMPOSANT DE PAGE PRINCIPAL (Gère l'authentification) ---
+// =================================================================
 export default function DashboardPage() {
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
+  // L'état de chargement manuel est conservé pour l'authentification
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -64,22 +70,49 @@ export default function DashboardPage() {
   )
 }
 
-// --- Composant Vue Enseignant ---
+// =================================================================
+// --- Composant Vue Enseignant (Migré vers useQuery/useMutation) ---
+// =================================================================
 function TeacherDashboard() {
-  const [quizzes, setQuizzes] = useState<Quiz[]>([])
+  const queryClient = useQueryClient()
 
-  useEffect(() => {
-    quizService.getAll().then(setQuizzes).catch(console.error)
-  }, [])
+  // 1. REQUÊTE (QUERY) : Récupérer la liste des quiz
+  const { 
+    data: quizzes, 
+    isLoading: isLoadingQuizzes, // Renommage pour clarté
+    error: quizzesError 
+  } = useQuery<Quiz[]>({
+    queryKey: ['quizzes'],        
+    queryFn: quizService.getAll,   
+  })
 
-  const handleDelete = async (id: number) => {
-    if(!confirm("Supprimer ce quiz ?")) return;
-    try {
-      await quizService.delete(id)
-      setQuizzes(quizzes.filter(q => q.id !== id))
-    } catch (err) {
-      alert("Erreur lors de la suppression")
+  // 2. MUTATION : Supprimer un quiz
+  const deleteQuizMutation = useMutation({
+    mutationFn: quizService.delete,
+    onSuccess: () => {
+      // Invalider le cache pour rafraîchir la liste des quiz
+      queryClient.invalidateQueries({ queryKey: ['quizzes'] })
+    },
+    onError: (err: any) => {
+      console.error("Erreur lors de la suppression du quiz :", err)
+      alert("Une erreur est survenue lors de la suppression du quiz.")
     }
+  })
+
+  // Gestion de l'état
+  if (isLoadingQuizzes) return <div>Chargement des quiz...</div>
+  if (quizzesError) return <div>Erreur lors du chargement des quiz.</div>
+
+  const isDeleting = deleteQuizMutation.isPending; // État de chargement pour la suppression
+
+  const handleDelete = (quizId: number) => {
+    if (isDeleting) return; // Empêcher les doubles clics
+
+    if (!confirm("Êtes-vous sûr de vouloir supprimer ce quiz ? Cette action est irréversible.")) {
+      return
+    }
+    // Déclenchement de la mutation
+    deleteQuizMutation.mutate(quizId)
   }
 
   return (
@@ -107,20 +140,21 @@ function TeacherDashboard() {
                   {quiz.description || "Aucune description"}
                 </p>
                 <div className="text-sm text-gray-400 mb-4">
+                  {/* @ts-ignore */}
                   {quiz.question_count} questions • Créé le {new Date(quiz.created_at).toLocaleDateString()}
                 </div>
               </div>
               
               <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
                 <Link href={`/quiz/${quiz.id}`} className="flex-1">
-                   <Button variant="outline" className="text-sm py-1">Modifier</Button>
+                  <Button variant="outline" className="text-sm py-1">Modifier</Button>
                 </Link>
-                {/* On ajoutera le bouton Lancer Session plus tard */}
                 <button 
                   onClick={() => handleDelete(quiz.id)}
-                  className="px-3 py-1 text-red-600 hover:bg-red-50 rounded text-sm font-medium"
+                  disabled={isDeleting} // Désactivation pendant la suppression
+                  className={`px-3 py-1 text-red-600 hover:bg-red-50 rounded text-sm font-medium ${isDeleting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  Suppr.
+                  {isDeleting ? 'Suppr...' : 'Suppr.'}
                 </button>
               </div>
             </div>
@@ -131,31 +165,46 @@ function TeacherDashboard() {
   )
 }
 
-// --- Composant Vue Élève ---
+// =================================================================
+// --- Composant Vue Élève (Migré vers useMutation) ---
+// =================================================================
 function StudentDashboard() {
   const router = useRouter()
   const [accessCode, setAccessCode] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState('')
+  // L'état d'erreur local est conservé pour la validation et l'affichage des erreurs API
 
-  const handleJoin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!accessCode) return
+  // 1. MUTATION : Rejoindre une session
+  const joinSessionMutation = useMutation({
+    mutationFn: (code: string) => sessionService.join(code),
     
-    setIsLoading(true)
-    setError('')
-
-    try {
-      const data = await sessionService.join(accessCode)
-      // Redirection vers la salle d'attente (à créer plus tard)
+    onSuccess: (data) => {
+      // Redirection vers la salle d'attente
       router.push(`/session/${data.session_id}`)
-    } catch (err: any) {
+    },
+    
+    onError: (err: any) => {
       console.error(err)
-      setError(err.response?.data?.access_code?.[0] || err.response?.data?.detail || "Code invalide ou session fermée")
-    } finally {
-      setIsLoading(false)
+      const errDetail = err.response?.data?.access_code?.[0] || err.response?.data?.detail 
+      // Utilisez l'état d'erreur local pour afficher les détails
+      alert(errDetail || "Code invalide ou session fermée")
     }
+  })
+
+  // La gestion des erreurs d'affichage local est simplifiée par l'utilisation d'une alerte
+  // ou en utilisant l'état isError et error.message dans le JSX.
+  const isLoading = joinSessionMutation.isPending;
+  const error = joinSessionMutation.isError ? (joinSessionMutation.error as any).response?.data?.detail || "Erreur de connexion." : '';
+
+  // 2. Gestionnaire de soumission (utilise la mutation)
+  const handleJoin = (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    if (!accessCode || accessCode.length < 6) return
+    
+    // Déclencher la mutation
+    joinSessionMutation.mutate(accessCode)
   }
+
 
   return (
     <div className="max-w-md mx-auto mt-10">
@@ -183,7 +232,7 @@ function StudentDashboard() {
             </div>
           )}
 
-          <Button type="submit" isLoading={isLoading} disabled={accessCode.length < 6}>
+          <Button type="submit" isLoading={isLoading} disabled={accessCode.length < 6 || isLoading}>
             Rejoindre la partie
           </Button>
         </form>

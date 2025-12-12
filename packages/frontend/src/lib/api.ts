@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const apiClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL: "http://localhost:8000", // Utilise une variable d'environnement dans un vrai projet
   headers: {
     'Content-Type': 'application/json',
   },
